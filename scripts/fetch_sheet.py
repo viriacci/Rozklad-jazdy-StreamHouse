@@ -1,6 +1,9 @@
 """
-Pobiera harmonogram z Google Sheets i zwraca dane dla BIEŻĄCEGO tygodnia
-(poniedziałek-niedziela).
+Pobiera harmonogram z Google Sheets i zwraca dane dla NASTĘPNEGO
+tygodnia (poniedziałek-niedziela) względem dnia uruchomienia.
+Skrypt jest odpalany raz w tygodniu, w niedzielę po południu (patrz
+.github/workflows/update_calendar.yml), więc "następny tydzień" =
+tydzień, który zaczyna się jutro.
 
 Format arkusza (BEZ wiersza nagłówka - dane od wiersza 1):
 
@@ -34,10 +37,16 @@ def _get_client():
 
 
 def _current_week_range(today=None):
-    """Zwraca listę 7 dat (poniedziałek..niedziela) bieżącego tygodnia."""
+    """
+    Zwraca listę 7 dat (poniedziałek..niedziela) NASTĘPNEGO tygodnia
+    względem `today` (domyślnie dzisiaj). Nazwa funkcji zostaje
+    (_current_week_range) żeby nie trzeba było zmieniać main.py -
+    zwraca po prostu inny tydzień niż poprzednio.
+    """
     today = today or dt.date.today()
-    monday = today - dt.timedelta(days=today.weekday())
-    return [monday + dt.timedelta(days=i) for i in range(7)]
+    this_monday = today - dt.timedelta(days=today.weekday())
+    next_monday = this_monday + dt.timedelta(days=7)
+    return [next_monday + dt.timedelta(days=i) for i in range(7)]
 
 
 def _parse_date(raw_value):
@@ -51,10 +60,32 @@ def _parse_date(raw_value):
         return None
 
 
+def _verify_sheet_access(client):
+    """
+    Wykonuje prosty request do arkusza i - jeśli coś jest nie tak - wypisuje
+    CZYTELNY powód zamiast pozwolić gspread wybuchnąć na próbie
+    zdekodowania pustej/nie-JSON-owej odpowiedzi jako JSON.
+    """
+    url = f"https://sheets.googleapis.com/v4/spreadsheets/{config.SHEET_ID}?fields=properties.title"
+    resp = client.session.get(url)
+    if resp.status_code != 200:
+        print("=" * 60)
+        print(f"BŁĄD dostępu do arkusza: HTTP {resp.status_code}")
+        print(f"Treść odpowiedzi: {resp.text[:500]!r}")
+        print(f"SHEET_ID użyty w requeście: {config.SHEET_ID!r}")
+        print("Sprawdź w tej kolejności:")
+        print("  1) SHEET_ID - czy to sam ID, nie cały URL i bez spacji/newline?")
+        print("  2) Czy Google Sheets API jest włączone w projekcie Cloud?")
+        print("  3) Czy arkusz jest udostępniony e-mailowi service account")
+        print("     (client_email z pliku JSON) jako Edytujący?")
+        print("=" * 60)
+        resp.raise_for_status()
+
+
 def fetch_week_schedule():
     """
     Zwraca dict: {data (str YYYY-MM-DD): [lista_streamerow_ktorzy_streamuja]}
-    dla każdego z 7 dni bieżącego tygodnia (nawet jeśli pusty).
+    dla każdego z 7 dni następnego tygodnia (nawet jeśli pusty).
     """
     week_dates = _current_week_range()
     week_dates_set = set(week_dates)
@@ -63,6 +94,7 @@ def fetch_week_schedule():
     known_streamers = set(config.STREAMERS.keys())
 
     client = _get_client()
+    _verify_sheet_access(client)
     sheet = client.open_by_key(config.SHEET_ID).worksheet(config.SHEET_WORKSHEET_NAME)
     rows = sheet.get_all_values()  # surowe wiersze, bez zakładania nagłówka
 
