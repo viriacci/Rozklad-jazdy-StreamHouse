@@ -21,17 +21,31 @@ DAY_NAMES_PL = [
 ]
 
 # --- Wymiary ---
-CANVAS_W = 780
-MARGIN = 24
-HEADER_H = 170
-ROW_H = 100
-CIRCLE_R = 36
-BANNER_H = 48
-BANNER_W_MIN = 170   # minimalna szerokość banera (dla krótkich nazw jak "SOBOTA")
-BANNER_PAD_X = 18    # margines tekstu wewnątrz banera z każdej strony
-BANNER_TIP_LEN = 24
-GAP_CIRCLE_BANNER = 16
-EMOTE_SIZE = 40
+# Bazowe wymiary są policzone dla płótna ~894px (poprzednia rozdzielczość).
+# TARGET_SIZE ustawia docelowy rozmiar kwadratu (np. SZABLON.png = 2000px),
+# a SCALE przelicza WSZYSTKIE rozmiary (czcionki, kółka, banery, marginesy)
+# proporcjonalnie - dzięki temu układ się nie psuje przy zmianie rozdzielczości.
+TARGET_SIZE = 2000
+_BASE_REFERENCE_SIZE = 894
+SCALE = TARGET_SIZE / _BASE_REFERENCE_SIZE
+
+
+def S(value):
+    """Skaluje wartość pikselową wg SCALE i zaokrągla do int."""
+    return round(value * SCALE)
+
+
+CANVAS_W = S(780)
+MARGIN = S(24)
+HEADER_H = S(170)
+ROW_H = S(100)
+CIRCLE_R = S(36)
+BANNER_H = S(48)
+BANNER_W_MIN = S(170)   # minimalna szerokość banera (dla krótkich nazw jak "SOBOTA")
+BANNER_PAD_X = S(18)    # margines tekstu wewnątrz banera z każdej strony
+BANNER_TIP_LEN = S(24)
+GAP_CIRCLE_BANNER = S(16)
+EMOTE_SIZE = S(40)
 
 # --- Kolory ---
 BG_BASE = (17, 18, 21, 255)
@@ -86,8 +100,8 @@ def _load_font(size, path=None):
 def _draw_dot_texture(width, height):
     layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
-    spacing = 30
-    half = 3.2  # połowa przekątnej rombu
+    spacing = S(30)
+    half = S(3.2)  # połowa przekątnej rombu
     for y in range(0, height, spacing):
         offset = spacing // 2 if (y // spacing) % 2 else 0
         for x in range(-offset, width, spacing):
@@ -101,31 +115,31 @@ def _draw_dot_texture(width, height):
 def _draw_glow_title(base_img, text, subtitle, width):
     draw = ImageDraw.Draw(base_img)
 
-    font_sub = _load_font(24)
+    font_sub = _load_font(S(24))
     sub_bbox = draw.textbbox((0, 0), subtitle, font=font_sub)
     sub_w = sub_bbox[2] - sub_bbox[0]
     draw.text(
-        ((width - sub_w) / 2 - sub_bbox[0], 22),
+        ((width - sub_w) / 2 - sub_bbox[0], S(22)),
         subtitle, font=font_sub, fill=SUBTITLE_COLOR,
     )
 
     max_title_w = width - MARGIN * 2
-    title_size = 46
+    title_size = S(46)
     font_title = _load_font(title_size, path=TITLE_FONT_PATH)
     title_bbox = draw.textbbox((0, 0), text, font=font_title)
-    while (title_bbox[2] - title_bbox[0]) > max_title_w and title_size > 24:
-        title_size -= 2
+    while (title_bbox[2] - title_bbox[0]) > max_title_w and title_size > S(24):
+        title_size -= S(2)
         font_title = _load_font(title_size, path=TITLE_FONT_PATH)
         title_bbox = draw.textbbox((0, 0), text, font=font_title)
     title_w = title_bbox[2] - title_bbox[0]
     title_x = (width - title_w) / 2 - title_bbox[0]
-    title_y = 64
+    title_y = S(64)
 
     # poświata: tekst rysowany na osobnej warstwie, rozmyty, doklejony pod ostrym tekstem
     glow_layer = Image.new("RGBA", base_img.size, (0, 0, 0, 0))
     glow_draw = ImageDraw.Draw(glow_layer)
     glow_draw.text((title_x, title_y), text, font=font_title, fill=TITLE_GLOW)
-    glow_layer = glow_layer.filter(ImageFilter.GaussianBlur(6))
+    glow_layer = glow_layer.filter(ImageFilter.GaussianBlur(S(6)))
     base_img.alpha_composite(glow_layer)
 
     draw = ImageDraw.Draw(base_img)
@@ -160,7 +174,7 @@ def _draw_banner(draw, tip_x, y_center, text, font, points_left):
         (rect_far, y_center + half_h),
         (rect_near, y_center + half_h),
     ]
-    draw.polygon(points, fill=BANNER_FILL, outline=BANNER_OUTLINE, width=3)
+    draw.polygon(points, fill=BANNER_FILL, outline=BANNER_OUTLINE, width=S(3))
 
     text_center_x = (rect_near + rect_far) / 2
     draw.text(
@@ -176,7 +190,7 @@ def _paste_ringed_avatar(base_img, avatar_path, center_xy, radius, ring_color):
     mask = Image.new("L", (size, size), 0)
     ImageDraw.Draw(mask).ellipse((0, 0, size, size), fill=255)
 
-    ring_pad = 5
+    ring_pad = S(5)
     ring_size = size + ring_pad * 2
     ring = Image.new("RGBA", (ring_size, ring_size), (0, 0, 0, 0))
     ring_draw = ImageDraw.Draw(ring)
@@ -199,13 +213,13 @@ def _draw_gray_circle(draw, center_xy, radius):
             center_xy[0] - radius, center_xy[1] - radius,
             center_xy[0] + radius, center_xy[1] + radius,
         ),
-        fill=GRAY_CIRCLE, outline=GRAY_CIRCLE_OUTLINE, width=2,
+        fill=GRAY_CIRCLE, outline=GRAY_CIRCLE_OUTLINE, width=S(2),
     )
 
 
 def _draw_no_stream_label(base_img, draw, center_x, y_center, font):
     emote = _get_no_stream_emote()
-    y = y_center - (EMOTE_SIZE / 2 if emote else 0) - 12
+    y = y_center - (EMOTE_SIZE / 2 if emote else 0) - S(12)
 
     if emote:
         emote_resized = emote.resize((EMOTE_SIZE, EMOTE_SIZE))
@@ -214,9 +228,9 @@ def _draw_no_stream_label(base_img, draw, center_x, y_center, font):
             (int(center_x - EMOTE_SIZE / 2), int(y)),
             emote_resized,
         )
-        text_y = y + EMOTE_SIZE + 4
+        text_y = y + EMOTE_SIZE + S(4)
     else:
-        text_y = y_center - 10
+        text_y = y_center - S(10)
 
     text = "BEZ STREAMKA"
     bbox = draw.textbbox((0, 0), text, font=font)
@@ -239,8 +253,8 @@ def render_week(schedule, week_dates, output_path="calendar.png"):
     _draw_glow_title(img, "STREAMY W TYM TYGODNIU", subtitle, canvas_w)
 
     draw = ImageDraw.Draw(img)
-    font_banner = _load_font(20, path=BANNER_FONT_PATH)
-    font_label = _load_font(16)
+    font_banner = _load_font(S(20), path=BANNER_FONT_PATH)
+    font_label = _load_font(S(16))
 
     center_x = canvas_w / 2
 
@@ -270,7 +284,7 @@ def render_week(schedule, week_dates, output_path="calendar.png"):
                         _paste_ringed_avatar(img, avatar_path, (cx, y_center), small_r, ring)
         else:
             _draw_gray_circle(draw, (center_x, y_center), CIRCLE_R)
-            label_center_x = center_x - (CIRCLE_R + 70) if banner_on_right else center_x + (CIRCLE_R + 70)
+            label_center_x = center_x - (CIRCLE_R + S(70)) if banner_on_right else center_x + (CIRCLE_R + S(70))
             _draw_no_stream_label(img, draw, label_center_x, y_center, font_label)
 
         # --- banner z dniem/datą (na przemian prawo/lewo) ---
