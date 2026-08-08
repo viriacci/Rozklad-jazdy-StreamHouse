@@ -1,89 +1,222 @@
 """
-Renderuje siatkę tygodnia jako PNG, w układzie 2 rzędów (4 dni + 3 dni)
-zamiast jednego rzędu 7 kolumn. Powód: przy 1 rzędzie obrazek ma
-proporcje ~5:1, a Discord skaluje podgląd na czacie do maks. szerokości
-~400px - przy takich proporcjach wychodzi z tego pasek wysokości
-~80px, nieczytelny. Układ 2x(4+3) daje proporcje bliższe kwadratowi,
-więc podgląd na czacie jest realnie czytelny bez klikania.
+Renderuje tygodniowy "kalendarz" w stylu bracketu turniejowego:
+ciemne teksturowane tło, neonowy tytuł na górze, a pod nim 7 wierszy
+(Pon..Niedz) z naprzemiennymi bannerami-strzałkami (raz z prawej, raz
+z lewej) wskazującymi na centralne kółko z avatarem/avatarami danego
+dnia. Dni bez streamu dostają szare kółko + etykietę "BEZ STREAMKA"
+z ikonką po przeciwnej stronie niż banner.
 
-Dla każdego dnia rysuje kółka z avatarami streamerów, którzy tego dnia
-streamują:
-  - 1 osoba  -> na środku góry komórki
-  - 2 osoby  -> w górnych rogach komórki
-  - 3 osoby  -> równomiernie na całej górnej krawędzi
+Kolory obwódki avatara per streamer - patrz RING_COLORS niżej.
 """
+import io
 import datetime as dt
-from PIL import Image, ImageDraw, ImageFont
+
+import requests
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 import config
 
-DAY_NAMES_PL = ["Pon", "Wt", "Śr", "Czw", "Pt", "Sob", "Niedz"]
+DAY_NAMES_PL = [
+    "PONIEDZIAŁEK", "WTOREK", "ŚRODA", "CZWARTEK", "PIĄTEK", "SOBOTA", "NIEDZIELA",
+]
 
-# Układ 2 rzędów: pierwszy 4 dni, drugi 3 dni.
-ROW_LAYOUT = [4, 3]
+# --- Wymiary ---
+CANVAS_W = 780
+MARGIN = 24
+HEADER_H = 170
+ROW_H = 100
+CIRCLE_R = 36
+BANNER_H = 48
+BANNER_W_MIN = 170   # minimalna szerokość banera (dla krótkich nazw jak "SOBOTA")
+BANNER_PAD_X = 18    # margines tekstu wewnątrz banera z każdej strony
+BANNER_TIP_LEN = 24
+GAP_CIRCLE_BANNER = 16
+EMOTE_SIZE = 40
 
-# Większe komórki niż w wersji 1-rzędowej - przy mniejszej liczbie kolumn
-# w rzędzie jest na to miejsce, a dzięki temu avatary i daty są czytelne
-# nawet w zeskalowanym podglądzie.
-CELL_WIDTH = 300
-CELL_HEIGHT = 260
-AVATAR_SIZE = 76
-HEADER_HEIGHT = 110  # 2 linie nagłówka (STREAMY + zakres dat)
-ROW_GAP = 16
+# --- Kolory ---
+BG_BASE = (17, 18, 21, 255)
+DOT_COLOR = (255, 255, 255, 16)
+TITLE_CYAN = (64, 224, 240, 255)
+TITLE_GLOW = (64, 224, 240, 130)
+SUBTITLE_COLOR = (230, 230, 235, 255)
+BANNER_FILL = (245, 245, 245, 255)
+BANNER_OUTLINE = (12, 12, 12, 255)
+BANNER_TEXT = (15, 15, 15, 255)
+GRAY_CIRCLE = (110, 112, 118, 255)
+GRAY_CIRCLE_OUTLINE = (150, 152, 158, 255)
+NO_STREAM_TEXT = (235, 235, 238, 255)
 
-# Naprzemienne odcienie komórek wg dnia tygodnia (Pon jasny, Wt ciemny, ...)
-COLOR_CELL_LIGHT = (52, 55, 61, 255)
-COLOR_CELL_DARK = (36, 38, 43, 255)
-COLOR_CELL_TODAY_BORDER = (227, 192, 72, 255)  # akcent, gdyby "dziś" wypadło w tym tygodniu
+# --- Obwódki avatarów per streamer (z prośby: #843935 ViviOnyx, #5c4f47 Shiroe) ---
+RING_COLORS = {
+    "ViviOnyx": (0x84, 0x39, 0x35, 255),
+    "Shiroe": (0x5C, 0x4F, 0x47, 255),
+}
 
-
-def avatar_positions(n, cell_width, avatar_size, margin_top=16, side_margin=16):
-    """Zwraca listę (x, y) - środków kółek - względem lewego górnego rogu komórki."""
-    r = avatar_size / 2
-    y = margin_top + r
-    if n == 0:
-        return []
-    if n == 1:
-        return [(cell_width / 2, y)]
-    if n == 2:
-        return [
-            (side_margin + r, y),
-            (cell_width - side_margin - r, y),
-        ]
-    # n >= 3: równomiernie na całej górnej krawędzi
-    usable = cell_width - 2 * side_margin - avatar_size
-    step = usable / (n - 1)
-    return [(side_margin + r + i * step, y) for i in range(n)]
-
-
-def paste_circular_avatar(base_img, avatar_path, center_xy, size):
-    """Wkleja avatar przycięty do koła, wyśrodkowany na center_xy."""
-    avatar = Image.open(avatar_path).convert("RGBA").resize((size, size))
-    mask = Image.new("L", (size, size), 0)
-    mask_draw = ImageDraw.Draw(mask)
-    mask_draw.ellipse((0, 0, size, size), fill=255)
-
-    # cienka obwódka dla czytelności na ciemnym tle
-    ring = Image.new("RGBA", (size + 6, size + 6), (0, 0, 0, 0))
-    ring_draw = ImageDraw.Draw(ring)
-    ring_draw.ellipse((0, 0, size + 6, size + 6), fill=(255, 255, 255, 60))
-    base_img.paste(
-        ring,
-        (int(center_xy[0] - size / 2 - 3), int(center_xy[1] - size / 2 - 3)),
-        ring,
-    )
-
-    x, y = int(center_xy[0] - size / 2), int(center_xy[1] - size / 2)
-    base_img.paste(avatar, (x, y), mask)
+# Emotka "brak streamu" (7TV) - pobierana raz przy starcie renderu.
+NO_STREAM_EMOTE_URL = "https://cdn.7tv.app/emote/01H6RWF1YR00065QRQ3BN9TC3P/3x.webp"
+_emote_cache = None
 
 
-def _load_font(size):
+def _get_no_stream_emote():
+    global _emote_cache
+    if _emote_cache is not None:
+        return _emote_cache
     try:
-        return ImageFont.truetype(config.FONT_PATH, size)
+        resp = requests.get(NO_STREAM_EMOTE_URL, timeout=10)
+        resp.raise_for_status()
+        img = Image.open(io.BytesIO(resp.content)).convert("RGBA")
+        _emote_cache = img
+    except Exception as e:
+        print(f"UWAGA: nie udało się pobrać emotki 'brak streamu' ({e}) - pomijam ikonę.")
+        _emote_cache = False  # False = "próbowałem, nie wyszło" (odróżnij od None = jeszcze nie próbowano)
+    return _emote_cache or None
+
+
+def _load_font(size, path=None):
+    try:
+        return ImageFont.truetype(path or config.FONT_PATH, size)
     except OSError:
         return ImageFont.truetype(
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size
         )
+
+
+def _draw_dot_texture(width, height):
+    layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer)
+    spacing = 26
+    r = 1.4
+    for y in range(0, height, spacing):
+        offset = spacing // 2 if (y // spacing) % 2 else 0
+        for x in range(-offset, width, spacing):
+            draw.ellipse((x - r, y - r, x + r, y + r), fill=DOT_COLOR)
+    return layer
+
+
+def _draw_glow_title(base_img, text, subtitle, width):
+    draw = ImageDraw.Draw(base_img)
+
+    font_sub = _load_font(24)
+    sub_bbox = draw.textbbox((0, 0), subtitle, font=font_sub)
+    sub_w = sub_bbox[2] - sub_bbox[0]
+    draw.text(
+        ((width - sub_w) / 2 - sub_bbox[0], 22),
+        subtitle, font=font_sub, fill=SUBTITLE_COLOR,
+    )
+
+    max_title_w = width - MARGIN * 2
+    title_size = 46
+    font_title = _load_font(title_size)
+    title_bbox = draw.textbbox((0, 0), text, font=font_title)
+    while (title_bbox[2] - title_bbox[0]) > max_title_w and title_size > 24:
+        title_size -= 2
+        font_title = _load_font(title_size)
+        title_bbox = draw.textbbox((0, 0), text, font=font_title)
+    title_w = title_bbox[2] - title_bbox[0]
+    title_x = (width - title_w) / 2 - title_bbox[0]
+    title_y = 64
+
+    # poświata: tekst rysowany na osobnej warstwie, rozmyty, doklejony pod ostrym tekstem
+    glow_layer = Image.new("RGBA", base_img.size, (0, 0, 0, 0))
+    glow_draw = ImageDraw.Draw(glow_layer)
+    glow_draw.text((title_x, title_y), text, font=font_title, fill=TITLE_GLOW)
+    glow_layer = glow_layer.filter(ImageFilter.GaussianBlur(6))
+    base_img.alpha_composite(glow_layer)
+
+    draw = ImageDraw.Draw(base_img)
+    draw.text((title_x, title_y), text, font=font_title, fill=TITLE_CYAN)
+
+
+def _draw_banner(draw, tip_x, y_center, text, font, points_left):
+    """
+    points_left=True  -> grot strzałki skierowany w LEWO (banner rozciąga się w prawo od grota)
+    points_left=False -> grot skierowany w PRAWO (banner rozciąga się w lewo od grota)
+    Szerokość banera dopasowana do długości tekstu (stała szerokość
+    ucinała dłuższe nazwy dni, np. "PONIEDZIAŁEK").
+    """
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    banner_w = max(BANNER_W_MIN, tw + BANNER_PAD_X * 2)
+
+    half_h = BANNER_H / 2
+    if points_left:
+        tip = (tip_x, y_center)
+        rect_near = tip_x + BANNER_TIP_LEN
+        rect_far = rect_near + banner_w
+    else:
+        tip = (tip_x, y_center)
+        rect_near = tip_x - BANNER_TIP_LEN
+        rect_far = rect_near - banner_w
+
+    points = [
+        tip,
+        (rect_near, y_center - half_h),
+        (rect_far, y_center - half_h),
+        (rect_far, y_center + half_h),
+        (rect_near, y_center + half_h),
+    ]
+    draw.polygon(points, fill=BANNER_FILL, outline=BANNER_OUTLINE, width=3)
+
+    text_center_x = (rect_near + rect_far) / 2
+    draw.text(
+        (text_center_x - tw / 2 - bbox[0], y_center - th / 2 - bbox[1]),
+        text, font=font, fill=BANNER_TEXT,
+    )
+    return banner_w
+
+
+def _paste_ringed_avatar(base_img, avatar_path, center_xy, radius, ring_color):
+    size = radius * 2
+    avatar = Image.open(avatar_path).convert("RGBA").resize((size, size))
+    mask = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(mask).ellipse((0, 0, size, size), fill=255)
+
+    ring_pad = 5
+    ring_size = size + ring_pad * 2
+    ring = Image.new("RGBA", (ring_size, ring_size), (0, 0, 0, 0))
+    ring_draw = ImageDraw.Draw(ring)
+    ring_draw.ellipse((0, 0, ring_size, ring_size), fill=ring_color)
+    base_img.paste(
+        ring,
+        (int(center_xy[0] - ring_size / 2), int(center_xy[1] - ring_size / 2)),
+        ring,
+    )
+    base_img.paste(
+        avatar,
+        (int(center_xy[0] - size / 2), int(center_xy[1] - size / 2)),
+        mask,
+    )
+
+
+def _draw_gray_circle(draw, center_xy, radius):
+    draw.ellipse(
+        (
+            center_xy[0] - radius, center_xy[1] - radius,
+            center_xy[0] + radius, center_xy[1] + radius,
+        ),
+        fill=GRAY_CIRCLE, outline=GRAY_CIRCLE_OUTLINE, width=2,
+    )
+
+
+def _draw_no_stream_label(base_img, draw, center_x, y_center, font):
+    emote = _get_no_stream_emote()
+    y = y_center - (EMOTE_SIZE / 2 if emote else 0) - 12
+
+    if emote:
+        emote_resized = emote.resize((EMOTE_SIZE, EMOTE_SIZE))
+        base_img.paste(
+            emote_resized,
+            (int(center_x - EMOTE_SIZE / 2), int(y)),
+            emote_resized,
+        )
+        text_y = y + EMOTE_SIZE + 4
+    else:
+        text_y = y_center - 10
+
+    text = "BEZ STREAMKA"
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw = bbox[2] - bbox[0]
+    draw.text((center_x - tw / 2 - bbox[0], text_y), text, font=font, fill=NO_STREAM_TEXT)
 
 
 def render_week(schedule, week_dates, output_path="calendar.png"):
@@ -91,96 +224,61 @@ def render_week(schedule, week_dates, output_path="calendar.png"):
     schedule: dict {YYYY-MM-DD: [nazwy_streamerow]}
     week_dates: lista 7 obiektów datetime.date, poniedziałek..niedziela
     """
-    max_cols = max(ROW_LAYOUT)
-    n_rows = len(ROW_LAYOUT)
+    height = HEADER_H + ROW_H * len(week_dates) + MARGIN
 
-    width = config.MARGIN * 2 + CELL_WIDTH * max_cols
-    height = (
-        config.MARGIN * 2
-        + HEADER_HEIGHT
-        + CELL_HEIGHT * n_rows
-        + ROW_GAP * (n_rows - 1)
-    )
+    img = Image.new("RGBA", (CANVAS_W, height), BG_BASE)
+    img.alpha_composite(_draw_dot_texture(CANVAS_W, height))
 
-    img = Image.new("RGBA", (width, height), config.COLOR_BG)
+    subtitle = f"{week_dates[0].strftime('%d.%m')} - {week_dates[-1].strftime('%d.%m')}"
+    _draw_glow_title(img, "STREAMY W TYM TYGODNIU", subtitle, CANVAS_W)
+
     draw = ImageDraw.Draw(img)
+    font_banner = _load_font(20)
+    font_label = _load_font(16)
 
-    font_day = _load_font(24)
-    font_date = _load_font(18)
-    font_title_big = _load_font(44)   # "STREAMY"
-    font_title_sub = _load_font(26)   # zakres dat
+    center_x = CANVAS_W / 2
 
-    today = dt.date.today()
+    for i, day in enumerate(week_dates):
+        y_center = HEADER_H + i * ROW_H + ROW_H / 2
+        banner_on_right = (i % 2 == 0)
 
-    title_main = "STREAMY"
-    title_sub = f"{week_dates[0].strftime('%d.%m')} - {week_dates[-1].strftime('%d.%m')}"
+        streamers_today = schedule.get(day.isoformat(), [])
 
-    bbox_main = draw.textbbox((0, 0), title_main, font=font_title_big)
-    main_w = bbox_main[2] - bbox_main[0]
-    draw.text(
-        ((width - main_w) / 2 - bbox_main[0], 8),
-        title_main, font=font_title_big, fill=config.COLOR_TEXT,
-    )
-
-    bbox_sub = draw.textbbox((0, 0), title_sub, font=font_title_sub)
-    sub_w = bbox_sub[2] - bbox_sub[0]
-    draw.text(
-        ((width - sub_w) / 2 - bbox_sub[0], 58),
-        title_sub, font=font_title_sub, fill=config.COLOR_TEXT_MUTED,
-    )
-
-    day_index = 0
-    row_top = config.MARGIN + HEADER_HEIGHT
-
-    for row_len in ROW_LAYOUT:
-        for col in range(row_len):
-            day = week_dates[day_index]
-            day_index += 1
-
-            x0 = config.MARGIN + col * CELL_WIDTH
-            y0 = row_top
-            x1 = x0 + CELL_WIDTH
-            y1 = y0 + CELL_HEIGHT
-
-            weekday_idx = day.weekday()  # 0=Pon
-            cell_color = COLOR_CELL_LIGHT if weekday_idx % 2 == 0 else COLOR_CELL_DARK
-            outline_color = COLOR_CELL_TODAY_BORDER if day == today else config.COLOR_GRID
-            outline_width = 3 if day == today else 1
-            draw.rectangle(
-                [x0, y0, x1, y1], fill=cell_color,
-                outline=outline_color, width=outline_width,
-            )
-
-            day_label = f"{DAY_NAMES_PL[weekday_idx]}  {day.strftime('%d.%m')}"
-            draw.text((x0 + 14, y0 + 10), day_label, font=font_day, fill=config.COLOR_TEXT)
-
-            streamers_today = schedule.get(day.isoformat(), [])
-
-            if streamers_today:
-                positions = avatar_positions(
-                    len(streamers_today), CELL_WIDTH, AVATAR_SIZE, margin_top=52,
-                )
-                for streamer_name, (px, py) in zip(streamers_today, positions):
-                    avatar_path = config.STREAMERS.get(streamer_name)
-                    if not avatar_path:
-                        continue
-                    paste_circular_avatar(img, avatar_path, (x0 + px, y0 + py), AVATAR_SIZE)
+        # --- avatar(y) / szare kółko na środku ---
+        if streamers_today:
+            if len(streamers_today) == 1:
+                avatar_path = config.STREAMERS.get(streamers_today[0])
+                ring = RING_COLORS.get(streamers_today[0], GRAY_CIRCLE)
+                if avatar_path:
+                    _paste_ringed_avatar(img, avatar_path, (center_x, y_center), CIRCLE_R, ring)
             else:
-                draw.text(
-                    (x0 + 14, y0 + CELL_HEIGHT - 34),
-                    "brak streamu",
-                    font=font_date,
-                    fill=config.COLOR_TEXT_MUTED,
-                )
+                offset = CIRCLE_R * 0.6
+                small_r = int(CIRCLE_R * 0.85)
+                xs = [center_x - offset, center_x + offset]
+                for name, cx in zip(streamers_today[:2], xs):
+                    avatar_path = config.STREAMERS.get(name)
+                    ring = RING_COLORS.get(name, GRAY_CIRCLE)
+                    if avatar_path:
+                        _paste_ringed_avatar(img, avatar_path, (cx, y_center), small_r, ring)
+        else:
+            _draw_gray_circle(draw, (center_x, y_center), CIRCLE_R)
+            label_center_x = center_x - (CIRCLE_R + 70) if banner_on_right else center_x + (CIRCLE_R + 70)
+            _draw_no_stream_label(img, draw, label_center_x, y_center, font_label)
 
-        row_top += CELL_HEIGHT + ROW_GAP
+        # --- banner z dniem/datą (na przemian prawo/lewo) ---
+        day_text = f"{DAY_NAMES_PL[i]} {day.strftime('%d.%m')}"
+        if banner_on_right:
+            tip_x = center_x + CIRCLE_R + GAP_CIRCLE_BANNER
+            _draw_banner(draw, tip_x, y_center, day_text, font_banner, points_left=True)
+        else:
+            tip_x = center_x - CIRCLE_R - GAP_CIRCLE_BANNER
+            _draw_banner(draw, tip_x, y_center, day_text, font_banner, points_left=False)
 
-    img.save(output_path)
+    img.convert("RGB").save(output_path)
     return output_path
 
 
 if __name__ == "__main__":
-    # szybki test lokalny bez arkusza - przykładowe dane
     monday = dt.date.today() - dt.timedelta(days=dt.date.today().weekday())
     week = [monday + dt.timedelta(days=i) for i in range(7)]
     example_schedule = {
