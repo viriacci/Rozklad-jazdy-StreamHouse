@@ -35,7 +35,7 @@ EMOTE_SIZE = 40
 
 # --- Kolory ---
 BG_BASE = (17, 18, 21, 255)
-DOT_COLOR = (255, 255, 255, 16)
+DOT_COLOR = (255, 255, 255, 42)
 TITLE_CYAN = (64, 224, 240, 255)
 TITLE_GLOW = (64, 224, 240, 130)
 SUBTITLE_COLOR = (230, 230, 235, 255)
@@ -84,12 +84,15 @@ def _load_font(size, path=None):
 def _draw_dot_texture(width, height):
     layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
-    spacing = 26
-    r = 1.4
+    spacing = 30
+    half = 3.2  # połowa przekątnej rombu
     for y in range(0, height, spacing):
         offset = spacing // 2 if (y // spacing) % 2 else 0
         for x in range(-offset, width, spacing):
-            draw.ellipse((x - r, y - r, x + r, y + r), fill=DOT_COLOR)
+            draw.polygon(
+                [(x, y - half), (x + half, y), (x, y + half), (x - half, y)],
+                fill=DOT_COLOR,
+            )
     return layer
 
 
@@ -225,24 +228,26 @@ def render_week(schedule, week_dates, output_path="calendar.png"):
     week_dates: lista 7 obiektów datetime.date, poniedziałek..niedziela
     """
     height = HEADER_H + ROW_H * len(week_dates) + MARGIN
+    canvas_w = height  # proporcje 1:1 - płótno poszerzone do wysokości treści
 
-    img = Image.new("RGBA", (CANVAS_W, height), BG_BASE)
-    img.alpha_composite(_draw_dot_texture(CANVAS_W, height))
+    img = Image.new("RGBA", (canvas_w, height), BG_BASE)
+    img.alpha_composite(_draw_dot_texture(canvas_w, height))
 
     subtitle = f"{week_dates[0].strftime('%d.%m')} - {week_dates[-1].strftime('%d.%m')}"
-    _draw_glow_title(img, "STREAMY W TYM TYGODNIU", subtitle, CANVAS_W)
+    _draw_glow_title(img, "STREAMY W TYM TYGODNIU", subtitle, canvas_w)
 
     draw = ImageDraw.Draw(img)
     font_banner = _load_font(20)
     font_label = _load_font(16)
 
-    center_x = CANVAS_W / 2
+    center_x = canvas_w / 2
 
     for i, day in enumerate(week_dates):
         y_center = HEADER_H + i * ROW_H + ROW_H / 2
         banner_on_right = (i % 2 == 0)
 
         streamers_today = schedule.get(day.isoformat(), [])
+        circle_extent = CIRCLE_R  # promień "zajętej" strefy na środku - rośnie przy 2 avatarach
 
         # --- avatar(y) / szare kółko na środku ---
         if streamers_today:
@@ -254,6 +259,7 @@ def render_week(schedule, week_dates, output_path="calendar.png"):
             else:
                 offset = CIRCLE_R * 0.6
                 small_r = int(CIRCLE_R * 0.85)
+                circle_extent = offset + small_r  # dwa kółka sięgają dalej niż jedno - banery muszą to uwzględnić
                 xs = [center_x - offset, center_x + offset]
                 for name, cx in zip(streamers_today[:2], xs):
                     avatar_path = config.STREAMERS.get(name)
@@ -268,10 +274,10 @@ def render_week(schedule, week_dates, output_path="calendar.png"):
         # --- banner z dniem/datą (na przemian prawo/lewo) ---
         day_text = f"{DAY_NAMES_PL[i]} {day.strftime('%d.%m')}"
         if banner_on_right:
-            tip_x = center_x + CIRCLE_R + GAP_CIRCLE_BANNER
+            tip_x = center_x + circle_extent + GAP_CIRCLE_BANNER
             _draw_banner(draw, tip_x, y_center, day_text, font_banner, points_left=True)
         else:
-            tip_x = center_x - CIRCLE_R - GAP_CIRCLE_BANNER
+            tip_x = center_x - circle_extent - GAP_CIRCLE_BANNER
             _draw_banner(draw, tip_x, y_center, day_text, font_banner, points_left=False)
 
     img.convert("RGB").save(output_path)
