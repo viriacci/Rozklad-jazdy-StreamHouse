@@ -52,7 +52,9 @@ RING_COLORS = {
     "Shiroe": (0x5C, 0x4F, 0x47, 255),
 }
 
-# Emotka "brak streamu" (7TV) - pobierana raz przy starcie renderu.
+# Font tytułu "STREAMY W TYM TYGODNIU" - osobny od reszty tekstów
+TITLE_FONT_PATH = "assets/fonts/Anton-Regular.ttf"
+BANNER_FONT_PATH = "assets/fonts/Roboto-Regular.ttf"
 NO_STREAM_EMOTE_URL = "https://cdn.7tv.app/emote/01H6RWF1YR00065QRQ3BN9TC3P/3x.webp"
 _emote_cache = None
 
@@ -109,11 +111,11 @@ def _draw_glow_title(base_img, text, subtitle, width):
 
     max_title_w = width - MARGIN * 2
     title_size = 46
-    font_title = _load_font(title_size)
+    font_title = _load_font(title_size, path=TITLE_FONT_PATH)
     title_bbox = draw.textbbox((0, 0), text, font=font_title)
     while (title_bbox[2] - title_bbox[0]) > max_title_w and title_size > 24:
         title_size -= 2
-        font_title = _load_font(title_size)
+        font_title = _load_font(title_size, path=TITLE_FONT_PATH)
         title_bbox = draw.textbbox((0, 0), text, font=font_title)
     title_w = title_bbox[2] - title_bbox[0]
     title_x = (width - title_w) / 2 - title_bbox[0]
@@ -237,7 +239,7 @@ def render_week(schedule, week_dates, output_path="calendar.png"):
     _draw_glow_title(img, "STREAMY W TYM TYGODNIU", subtitle, canvas_w)
 
     draw = ImageDraw.Draw(img)
-    font_banner = _load_font(20)
+    font_banner = _load_font(20, path=BANNER_FONT_PATH)
     font_label = _load_font(16)
 
     center_x = canvas_w / 2
