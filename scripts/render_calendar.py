@@ -9,10 +9,11 @@ z ikonką po przeciwnej stronie niż banner.
 Kolory obwódki avatara per streamer - patrz RING_COLORS niżej.
 """
 import io
+import os
 import datetime as dt
 
 import requests
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageOps
 
 import config
 
@@ -69,6 +70,7 @@ RING_COLORS = {
 # Font tytułu "STREAMY W TYM TYGODNIU" - osobny od reszty tekstów
 TITLE_FONT_PATH = "assets/fonts/Anton-Regular.ttf"
 BANNER_FONT_PATH = "assets/fonts/Roboto-Regular.ttf"
+PATTERN_IMAGE_PATH = "assets/pattern.png"
 NO_STREAM_EMOTE_URL = "https://cdn.7tv.app/emote/01H6RWF1YR00065QRQ3BN9TC3P/3x.webp"
 _emote_cache = None
 
@@ -98,6 +100,28 @@ def _load_font(size, path=None):
 
 
 def _draw_dot_texture(width, height):
+    if os.path.exists(PATTERN_IMAGE_PATH):
+        return _texture_from_pattern_image(width, height)
+    return _texture_procedural(width, height)
+
+
+def _texture_from_pattern_image(width, height):
+    """
+    Wykorzystuje assets/pattern.png (ciemne romby na jasnym tle) jako
+    maskę: jasność piksela decyduje, gdzie i jak mocno pojawi się nasz
+    DOT_COLOR na ciemnym tle. Obraz jest ROZCIĄGANY do rozmiaru płótna
+    (to gotowa kompozycja z gradientem gęstości, nie kafelek do powielania).
+    """
+    src = Image.open(PATTERN_IMAGE_PATH).convert("L")
+    src = src.resize((width, height), Image.LANCZOS)
+    mask = ImageOps.invert(src)  # ciemne romby (małe wartości) -> wysoka nieprzezroczystość
+
+    color_layer = Image.new("RGBA", (width, height), DOT_COLOR)
+    transparent = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    return Image.composite(color_layer, transparent, mask)
+
+
+def _texture_procedural(width, height):
     layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
     spacing = S(30)
@@ -207,16 +231,6 @@ def _paste_ringed_avatar(base_img, avatar_path, center_xy, radius, ring_color):
     )
 
 
-def _draw_gray_circle(draw, center_xy, radius):
-    draw.ellipse(
-        (
-            center_xy[0] - radius, center_xy[1] - radius,
-            center_xy[0] + radius, center_xy[1] + radius,
-        ),
-        fill=GRAY_CIRCLE, outline=GRAY_CIRCLE_OUTLINE, width=S(2),
-    )
-
-
 def _draw_no_stream_label(base_img, draw, center_x, y_center, font):
     emote = _get_no_stream_emote()
     y = y_center - (EMOTE_SIZE / 2 if emote else 0) - S(12)
@@ -273,8 +287,9 @@ def render_week(schedule, week_dates, output_path="calendar.png"):
                 if avatar_path:
                     _paste_ringed_avatar(img, avatar_path, (center_x, y_center), CIRCLE_R, ring)
             else:
-                offset = CIRCLE_R * 0.6
-                small_r = int(CIRCLE_R * 0.85)
+                small_r = round(CIRCLE_R * 0.8)
+                avatar_gap = S(8)  # odstęp między krawędziami kółek - MUSI być >= small_r, inaczej się nakładają
+                offset = small_r + avatar_gap / 2
                 circle_extent = offset + small_r  # dwa kółka sięgają dalej niż jedno - banery muszą to uwzględnić
                 xs = [center_x - offset, center_x + offset]
                 for name, cx in zip(streamers_today[:2], xs):
@@ -283,9 +298,7 @@ def render_week(schedule, week_dates, output_path="calendar.png"):
                     if avatar_path:
                         _paste_ringed_avatar(img, avatar_path, (cx, y_center), small_r, ring)
         else:
-            _draw_gray_circle(draw, (center_x, y_center), CIRCLE_R)
-            label_center_x = center_x - (CIRCLE_R + S(70)) if banner_on_right else center_x + (CIRCLE_R + S(70))
-            _draw_no_stream_label(img, draw, label_center_x, y_center, font_label)
+            _draw_no_stream_label(img, draw, center_x, y_center, font_label)
 
         # --- banner z dniem/datą (na przemian prawo/lewo) ---
         day_text = f"{DAY_NAMES_PL[i]} {day.strftime('%d.%m')}"
