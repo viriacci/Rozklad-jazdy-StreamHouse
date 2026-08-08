@@ -1,0 +1,41 @@
+name: Aktualizacja kalendarza streamów
+
+on:
+  schedule:
+    # 5:00 UTC = 7:00 czasu polskiego (zimą) / 6:00 UTC = 8:00 (lato, DST)
+    # jeśli chcesz stałą godzinę PL niezależnie od DST, zobacz README
+    - cron: "0 5 * * *"
+  workflow_dispatch: {}  # pozwala odpalić ręcznie z zakładki Actions
+
+jobs:
+  update-calendar:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Wygeneruj i wyślij kalendarz
+        working-directory: .
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python scripts/main.py
+
+      - name: Zapisz message_id.txt z powrotem do repo (jeśli się zmienił)
+        run: |
+          git config user.name "calendar-bot"
+          git config user.email "calendar-bot@users.noreply.github.com"
+          git add state/message_id.txt
+          git diff --cached --quiet || git commit -m "chore: update message_id"
+          git push
