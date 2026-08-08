@@ -67,7 +67,7 @@ def _verify_sheet_access(client):
     zdekodowania pustej/nie-JSON-owej odpowiedzi jako JSON.
     """
     url = f"https://sheets.googleapis.com/v4/spreadsheets/{config.SHEET_ID}?fields=properties.title"
-    resp = client.session.get(url)
+    resp = client.http_client.session.get(url)
     if resp.status_code != 200:
         print("=" * 60)
         print(f"BŁĄD dostępu do arkusza: HTTP {resp.status_code}")
