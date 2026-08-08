@@ -41,31 +41,37 @@ def post_or_edit_calendar(image_path, content_text=""):
     message_id = _read_message_id()
 
     with open(image_path, "rb") as f:
-        files = {"file": ("calendar.png", f, "image/png")}
-        payload = {"content": content_text}
+        image_bytes = f.read()  # wczytane RAZ do pamięci - bez ryzyka wyczerpanego strumienia
 
-        if message_id:
-            url = (
-                f"https://discord.com/api/webhooks/{webhook_id}/"
-                f"{webhook_token}/messages/{message_id}"
-            )
-            resp = requests.patch(url, data=payload, files=files)
-            if resp.status_code == 404:
-                # wiadomość została ręcznie usunięta - tworzymy nową
-                message_id = None
-            else:
-                resp.raise_for_status()
-                print(f"Zedytowano wiadomość {message_id}")
-                return message_id
+    payload = {"content": content_text}
 
-        if not message_id:
-            url = f"https://discord.com/api/webhooks/{webhook_id}/{webhook_token}?wait=true"
-            resp = requests.post(url, data=payload, files=files)
+    def _files():
+        # świeży słownik files przy KAŻDYM requeście - inaczej drugi request
+        # (fallback POST po nieudanym PATCH) wyślie pusty/wyczerpany strumień
+        return {"file": ("calendar.png", image_bytes, "image/png")}
+
+    if message_id:
+        url = (
+            f"https://discord.com/api/webhooks/{webhook_id}/"
+            f"{webhook_token}/messages/{message_id}"
+        )
+        resp = requests.patch(url, data=payload, files=_files())
+        if resp.status_code == 404:
+            # wiadomość została ręcznie usunięta - tworzymy nową
+            message_id = None
+        else:
             resp.raise_for_status()
-            new_id = resp.json()["id"]
-            _write_message_id(new_id)
-            print(f"Utworzono nową wiadomość {new_id} - PRZYPNIJ JĄ RĘCZNIE w Discordzie.")
-            return new_id
+            print(f"Zedytowano wiadomość {message_id}")
+            return message_id
+
+    if not message_id:
+        url = f"https://discord.com/api/webhooks/{webhook_id}/{webhook_token}?wait=true"
+        resp = requests.post(url, data=payload, files=_files())
+        resp.raise_for_status()
+        new_id = resp.json()["id"]
+        _write_message_id(new_id)
+        print(f"Utworzono nową wiadomość {new_id} - PRZYPNIJ JĄ RĘCZNIE w Discordzie.")
+        return new_id
 
 
 if __name__ == "__main__":
