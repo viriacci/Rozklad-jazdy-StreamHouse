@@ -15,10 +15,9 @@ plam koloru), nie odgadniete na oko - patrz stale nizej.
 UKLAD (ustalony na podstawie 5.png-referencji i mockupu, POPRAWIONE wg
 oznaczen 1/2 na circle-placeholderach):
   - Dwie STALE pozycje x na kazdy dzien: LEWA (x=875) i PRAWA (x=1124).
-  - AVATARY: slot "1" (pierwszy streamer) jest ZAWSZE po tej samej stronie
-    co pigulka danego dnia (PON/SR/PT/NIEDZ -> pigulka lewo -> 1=lewo, 2=prawo;
-    WT/CZW/SOB -> pigulka prawo -> 1=prawo, 2=lewo). Jesli tylko 1 streamer,
-    idzie w slot "1", drugi slot zostaje pusty.
+  - AVATARY: ViviOnyx zawsze w LEWYM slocie, Shiroe zawsze w PRAWYM
+    slocie, niezaleznie od strony pigulki danego dnia. Jesli tylko
+    jeden streamer, idzie w swoj staly slot, drugi slot zostaje pusty.
   - 0 streamerow danego dnia: tekst "BEZ STREAMKA" zawsze w LEWYM slocie,
     emotka zawsze w PRAWYM (ustalone z 5.png, niezalezne od strony pigulki).
 """
@@ -70,6 +69,13 @@ RING_COLORS = {
     "Shiroe": (0x5C, 0x4F, 0x47, 255),
 }
 FALLBACK_RING = (110, 112, 118, 255)
+
+# Stale pozycje avatarow: ViviOnyx zawsze lewo, Shiroe zawsze prawo,
+# niezaleznie od strony pigulki danego dnia.
+FIXED_SLOT_X = {
+    "ViviOnyx": COL_X_LEFT,
+    "Shiroe": COL_X_RIGHT,
+}
 
 WHITE = (255, 255, 255, 255)
 
@@ -188,14 +194,10 @@ def render_week(schedule, week_dates, output_path="calendar.png"):
                 font=no_stream_font,
             )
         else:
-            # slot "1" (pierwszy streamer) po tej samej stronie co pigulka
-            # tego dnia; PON/SR/PT/NIEDZ (i parzyste) = pigulka lewo,
-            # WT/CZW/SOB (i nieparzyste) = pigulka prawo
-            pill_on_left = (i % 2 == 0)
-            slot1_x = COL_X_LEFT if pill_on_left else COL_X_RIGHT
-            slot2_x = COL_X_RIGHT if pill_on_left else COL_X_LEFT
-            slots = [slot1_x, slot2_x]
-            for name, slot_x in zip(streamers_today[:2], slots):
+            # ViviOnyx zawsze w lewym slocie, Shiroe zawsze w prawym,
+            # niezaleznie od strony pigulki danego dnia
+            for name in streamers_today[:2]:
+                slot_x = FIXED_SLOT_X.get(name, COL_X_LEFT)
                 avatar_path = config.STREAMERS.get(name)
                 ring = RING_COLORS.get(name, FALLBACK_RING)
                 if avatar_path:
