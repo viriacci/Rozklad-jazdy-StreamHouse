@@ -12,13 +12,15 @@ Renderuje tygodniowy harmonogram na bazie gotowych assetow graficznych
 Pozycje pigulek i kolek zostaly ZMIERZONE programowo z 4.png (wykrywanie
 plam koloru), nie odgadniete na oko - patrz stale nizej.
 
-UKLAD (ustalony na podstawie 5.png-referencji i mockupu):
-  - Dwie STALE kolumny "slotow" na kazdy dzien: LEWA (x=875) i PRAWA (x=1124).
-  - 0 streamerow danego dnia: LEWY slot = tekst "BEZ STREAMKA", PRAWY = emotka.
-  - 1 streamer: trafia do LEWEGO slotu, prawy zostaje pusty (samo tlo).
-  - 2 streamerow: pierwszy -> lewy slot, drugi -> prawy slot.
-  Jesli to zalozenie o pojedynczym streamerze (lewy slot) jest odwrotne
-  niz zamierzano - to jedna linijka do zmiany (patrz funkcja render_week).
+UKLAD (ustalony na podstawie 5.png-referencji i mockupu, POPRAWIONE wg
+oznaczen 1/2 na circle-placeholderach):
+  - Dwie STALE pozycje x na kazdy dzien: LEWA (x=875) i PRAWA (x=1124).
+  - AVATARY: slot "1" (pierwszy streamer) jest ZAWSZE po tej samej stronie
+    co pigulka danego dnia (PON/SR/PT/NIEDZ -> pigulka lewo -> 1=lewo, 2=prawo;
+    WT/CZW/SOB -> pigulka prawo -> 1=prawo, 2=lewo). Jesli tylko 1 streamer,
+    idzie w slot "1", drugi slot zostaje pusty.
+  - 0 streamerow danego dnia: tekst "BEZ STREAMKA" zawsze w LEWYM slocie,
+    emotka zawsze w PRAWYM (ustalone z 5.png, niezalezne od strony pigulki).
 """
 import datetime as dt
 
@@ -186,7 +188,13 @@ def render_week(schedule, week_dates, output_path="calendar.png"):
                 font=no_stream_font,
             )
         else:
-            slots = [COL_X_LEFT, COL_X_RIGHT]
+            # slot "1" (pierwszy streamer) po tej samej stronie co pigulka
+            # tego dnia; PON/SR/PT/NIEDZ (i parzyste) = pigulka lewo,
+            # WT/CZW/SOB (i nieparzyste) = pigulka prawo
+            pill_on_left = (i % 2 == 0)
+            slot1_x = COL_X_LEFT if pill_on_left else COL_X_RIGHT
+            slot2_x = COL_X_RIGHT if pill_on_left else COL_X_LEFT
+            slots = [slot1_x, slot2_x]
             for name, slot_x in zip(streamers_today[:2], slots):
                 avatar_path = config.STREAMERS.get(name)
                 ring = RING_COLORS.get(name, FALLBACK_RING)
