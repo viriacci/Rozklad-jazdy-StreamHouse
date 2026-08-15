@@ -163,4 +163,4 @@ python render_calendar.py
 
 ## Licencja
 
-Brak zdefiniowanej licencji — repozytorium prywatne/projektowe. Jeśli chcesz je udostępnić publicznie, rozważ dodanie pliku `LICENSE`.
+Projekt udostępniony na licencji **MIT** — szczegóły w pliku [`LICENSE`](./LICENSE). W skrócie: możesz swobodnie kopiować, modyfikować i wykorzystywać ten kod (również komercyjnie), pod warunkiem zachowania informacji o prawach autorskich. Kod dostarczany jest „tak jak jest”, bez żadnej gwarancji.
