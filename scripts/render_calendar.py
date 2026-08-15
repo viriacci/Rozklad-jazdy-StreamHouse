@@ -1,211 +1,122 @@
 """
-Renderuje tygodniowy "kalendarz" w stylu bracketu turniejowego:
-ciemne teksturowane tło, neonowy tytuł na górze, a pod nim 7 wierszy
-(Pon..Niedz) z naprzemiennymi bannerami-strzałkami (raz z prawej, raz
-z lewej) wskazującymi na centralne kółko z avatarem/avatarami danego
-dnia. Dni bez streamu dostają szare kółko + etykietę "BEZ STREAMKA"
-z ikonką po przeciwnej stronie niż banner.
+Renderuje tygodniowy harmonogram na bazie gotowych assetow graficznych
+(zamiast rysowac wszystko proceduralnie):
 
-Kolory obwódki avatara per streamer - patrz RING_COLORS niżej.
+  assets/bg1.png - tlo (grzybki, kaczka, ksiazki) - UZYWANE 1:1 jako baza
+  assets/4.png   - warstwa "edycyjna": zawiera GOTOWE pigulki dni (PON/WT/...)
+                   + brazowe kolka (TYLKO wskazniki pozycji - NIGDY nie
+                   trafiaja do finalnego obrazka) + "widmowy" tytul/date
+                   (tez tylko wskazniki pozycji/rozmiaru czcionki)
+  assets/4x.png  - emotka "brak streamu" (lokalny plik, bez pobierania z sieci)
+
+Pozycje pigulek i kolek zostaly ZMIERZONE programowo z 4.png (wykrywanie
+plam koloru), nie odgadniete na oko - patrz stale nizej.
+
+UKLAD (ustalony na podstawie 5.png-referencji i mockupu):
+  - Dwie STALE kolumny "slotow" na kazdy dzien: LEWA (x=875) i PRAWA (x=1124).
+  - 0 streamerow danego dnia: LEWY slot = tekst "BEZ STREAMKA", PRAWY = emotka.
+  - 1 streamer: trafia do LEWEGO slotu, prawy zostaje pusty (samo tlo).
+  - 2 streamerow: pierwszy -> lewy slot, drugi -> prawy slot.
+  Jesli to zalozenie o pojedynczym streamerze (lewy slot) jest odwrotne
+  niz zamierzano - to jedna linijka do zmiany (patrz funkcja render_week).
 """
-import io
-import os
 import datetime as dt
 
-import requests
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageOps
+from PIL import Image, ImageDraw, ImageFont
 
 import config
 
-DAY_NAMES_PL = [
-    "PONIEDZIAŁEK", "WTOREK", "ŚRODA", "CZWARTEK", "PIĄTEK", "SOBOTA", "NIEDZIELA",
+# --- Pliki assetow ---
+BG_PATH = "assets/bg1.png"
+EDITORIAL_LAYER_PATH = "assets/4.png"
+EMOTE_PATH = "assets/4x.png"
+TITLE_FONT_PATH = "assets/fonts/Anton-Regular.ttf"
+
+CANVAS_SIZE = 2000
+
+# --- Zmierzone wspolrzedne (ze skryptu analizujacego 4.png) ---
+# Kolejnosc dni: poniedzialek .. niedziela
+DAY_ROW_Y = [510, 712, 919, 1121, 1326, 1533, 1738]
+COL_X_LEFT = 875
+COL_X_RIGHT = 1124
+CIRCLE_R = 92
+
+# Pigulki dni: (center_y, center_x, polowa_szerokosci, polowa_wysokosci)
+PILL_HALF_W = 153
+PILL_HALF_H = 92
+PILL_CENTERS = [
+    (510, 509),    # PON
+    (712, 1491),   # WT
+    (919, 509),    # SR
+    (1121, 1491),  # CZW
+    (1326, 509),   # PT
+    (1533, 1491),  # SOB
+    (1738, 509),   # NIEDZ
 ]
 
-# --- Wymiary ---
-# Bazowe wymiary są policzone dla płótna ~894px (poprzednia rozdzielczość).
-# TARGET_SIZE ustawia docelowy rozmiar kwadratu (np. SZABLON.png = 2000px),
-# a SCALE przelicza WSZYSTKIE rozmiary (czcionki, kółka, banery, marginesy)
-# proporcjonalnie - dzięki temu układ się nie psuje przy zmianie rozdzielczości.
-TARGET_SIZE = 2000
-_BASE_REFERENCE_SIZE = 894
-SCALE = TARGET_SIZE / _BASE_REFERENCE_SIZE
+# Tytul i data - zmierzone bbox "widmowego" tekstu w 4.png
+DATE_Y_CENTER = 104
+TITLE_Y_CENTER = 276
+TITLE_MAX_WIDTH = 1450  # z marginesem wzgledem zmierzonych 1422px
 
+# "BEZ STREAMKA" + emotka - zmierzone z 5.png (referencyjny mockup slotu)
+NO_STREAM_TEXT_SIZE = (223, 90)   # w x h dwoch linii tekstu
+EMOTE_SIZE = (164, 111)           # w x h
 
-def S(value):
-    """Skaluje wartość pikselową wg SCALE i zaokrągla do int."""
-    return round(value * SCALE)
-
-
-CANVAS_W = S(780)
-MARGIN = S(24)
-HEADER_H = S(170)
-ROW_H = S(100)
-CIRCLE_R = S(36)
-BANNER_H = S(48)
-BANNER_W_MIN = S(170)   # minimalna szerokość banera (dla krótkich nazw jak "SOBOTA")
-BANNER_PAD_X = S(18)    # margines tekstu wewnątrz banera z każdej strony
-BANNER_TIP_LEN = S(24)
-GAP_CIRCLE_BANNER = S(16)
-EMOTE_SIZE = S(40)
-
-# --- Kolory ---
-BG_BASE = (17, 18, 21, 255)
-DOT_COLOR = (255, 255, 255, 42)
-TITLE_CYAN = (64, 224, 240, 255)
-TITLE_GLOW = (64, 224, 240, 130)
-SUBTITLE_COLOR = (230, 230, 235, 255)
-BANNER_FILL = (245, 245, 245, 255)
-BANNER_OUTLINE = (12, 12, 12, 255)
-BANNER_TEXT = (15, 15, 15, 255)
-GRAY_CIRCLE = (110, 112, 118, 255)
-GRAY_CIRCLE_OUTLINE = (150, 152, 158, 255)
-NO_STREAM_TEXT = (235, 235, 238, 255)
-
-# --- Obwódki avatarów per streamer (z prośby: #843935 ViviOnyx, #5c4f47 Shiroe) ---
 RING_COLORS = {
     "ViviOnyx": (0x84, 0x39, 0x35, 255),
     "Shiroe": (0x5C, 0x4F, 0x47, 255),
 }
+FALLBACK_RING = (110, 112, 118, 255)
 
-# Font tytułu "STREAMY W TYM TYGODNIU" - osobny od reszty tekstów
-TITLE_FONT_PATH = "assets/fonts/Anton-Regular.ttf"
-BANNER_FONT_PATH = "assets/fonts/Roboto-Regular.ttf"
-PATTERN_IMAGE_PATH = "assets/pattern.png"
-NO_STREAM_EMOTE_URL = "https://cdn.7tv.app/emote/01H6RWF1YR00065QRQ3BN9TC3P/3x.webp"
+WHITE = (255, 255, 255, 255)
+
 _emote_cache = None
 
 
-def _get_no_stream_emote():
+def _get_emote():
     global _emote_cache
-    if _emote_cache is not None:
-        return _emote_cache
-    try:
-        resp = requests.get(NO_STREAM_EMOTE_URL, timeout=10)
-        resp.raise_for_status()
-        img = Image.open(io.BytesIO(resp.content)).convert("RGBA")
-        _emote_cache = img
-    except Exception as e:
-        print(f"UWAGA: nie udało się pobrać emotki 'brak streamu' ({e}) - pomijam ikonę.")
-        _emote_cache = False  # False = "próbowałem, nie wyszło" (odróżnij od None = jeszcze nie próbowano)
-    return _emote_cache or None
+    if _emote_cache is None:
+        _emote_cache = Image.open(EMOTE_PATH).convert("RGBA")
+    return _emote_cache
 
 
-def _load_font(size, path=None):
+def _load_font(size, path=TITLE_FONT_PATH):
     try:
-        return ImageFont.truetype(path or config.FONT_PATH, size)
+        return ImageFont.truetype(path, size)
     except OSError:
         return ImageFont.truetype(
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size
         )
 
 
-def _draw_dot_texture(width, height):
-    if os.path.exists(PATTERN_IMAGE_PATH):
-        return _texture_from_pattern_image(width, height)
-    return _texture_procedural(width, height)
+def _fit_font(draw, text, max_width, start_size, min_size=20):
+    size = start_size
+    font = _load_font(size)
+    while size > min_size:
+        bbox = draw.textbbox((0, 0), text, font=font)
+        if (bbox[2] - bbox[0]) <= max_width:
+            return font, bbox
+        size -= 2
+        font = _load_font(size)
+    return font, draw.textbbox((0, 0), text, font=font)
 
 
-def _texture_from_pattern_image(width, height):
-    """
-    Wykorzystuje assets/pattern.png (ciemne romby na jasnym tle) jako
-    maskę: jasność piksela decyduje, gdzie i jak mocno pojawi się nasz
-    DOT_COLOR na ciemnym tle. Obraz jest ROZCIĄGANY do rozmiaru płótna
-    (to gotowa kompozycja z gradientem gęstości, nie kafelek do powielania).
-    """
-    src = Image.open(PATTERN_IMAGE_PATH).convert("L")
-    src = src.resize((width, height), Image.LANCZOS)
-    mask = ImageOps.invert(src)  # ciemne romby (małe wartości) -> wysoka nieprzezroczystość
-
-    color_layer = Image.new("RGBA", (width, height), DOT_COLOR)
-    transparent = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    return Image.composite(color_layer, transparent, mask)
-
-
-def _texture_procedural(width, height):
-    layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(layer)
-    spacing = S(30)
-    half = S(3.2)  # połowa przekątnej rombu
-    for y in range(0, height, spacing):
-        offset = spacing // 2 if (y // spacing) % 2 else 0
-        for x in range(-offset, width, spacing):
-            draw.polygon(
-                [(x, y - half), (x + half, y), (x, y + half), (x - half, y)],
-                fill=DOT_COLOR,
-            )
-    return layer
-
-
-def _draw_glow_title(base_img, text, subtitle, width):
-    draw = ImageDraw.Draw(base_img)
-
-    font_sub = _load_font(S(24))
-    sub_bbox = draw.textbbox((0, 0), subtitle, font=font_sub)
-    sub_w = sub_bbox[2] - sub_bbox[0]
-    draw.text(
-        ((width - sub_w) / 2 - sub_bbox[0], S(22)),
-        subtitle, font=font_sub, fill=SUBTITLE_COLOR,
-    )
-
-    max_title_w = width - MARGIN * 2
-    title_size = S(46)
-    font_title = _load_font(title_size, path=TITLE_FONT_PATH)
-    title_bbox = draw.textbbox((0, 0), text, font=font_title)
-    while (title_bbox[2] - title_bbox[0]) > max_title_w and title_size > S(24):
-        title_size -= S(2)
-        font_title = _load_font(title_size, path=TITLE_FONT_PATH)
-        title_bbox = draw.textbbox((0, 0), text, font=font_title)
-    title_w = title_bbox[2] - title_bbox[0]
-    title_x = (width - title_w) / 2 - title_bbox[0]
-    title_y = S(64)
-
-    # poświata: tekst rysowany na osobnej warstwie, rozmyty, doklejony pod ostrym tekstem
-    glow_layer = Image.new("RGBA", base_img.size, (0, 0, 0, 0))
-    glow_draw = ImageDraw.Draw(glow_layer)
-    glow_draw.text((title_x, title_y), text, font=font_title, fill=TITLE_GLOW)
-    glow_layer = glow_layer.filter(ImageFilter.GaussianBlur(S(6)))
-    base_img.alpha_composite(glow_layer)
-
-    draw = ImageDraw.Draw(base_img)
-    draw.text((title_x, title_y), text, font=font_title, fill=TITLE_CYAN)
-
-
-def _draw_banner(draw, tip_x, y_center, text, font, points_left):
-    """
-    points_left=True  -> grot strzałki skierowany w LEWO (banner rozciąga się w prawo od grota)
-    points_left=False -> grot skierowany w PRAWO (banner rozciąga się w lewo od grota)
-    Szerokość banera dopasowana do długości tekstu (stała szerokość
-    ucinała dłuższe nazwy dni, np. "PONIEDZIAŁEK").
-    """
+def _draw_centered_text(draw, text, center_x, center_y, font):
     bbox = draw.textbbox((0, 0), text, font=font)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    banner_w = max(BANNER_W_MIN, tw + BANNER_PAD_X * 2)
+    w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    draw.text((center_x - w / 2 - bbox[0], center_y - h / 2 - bbox[1]), text, font=font, fill=WHITE)
 
-    half_h = BANNER_H / 2
-    if points_left:
-        tip = (tip_x, y_center)
-        rect_near = tip_x + BANNER_TIP_LEN
-        rect_far = rect_near + banner_w
-    else:
-        tip = (tip_x, y_center)
-        rect_near = tip_x - BANNER_TIP_LEN
-        rect_far = rect_near - banner_w
 
-    points = [
-        tip,
-        (rect_near, y_center - half_h),
-        (rect_far, y_center - half_h),
-        (rect_far, y_center + half_h),
-        (rect_near, y_center + half_h),
-    ]
-    draw.polygon(points, fill=BANNER_FILL, outline=BANNER_OUTLINE, width=S(3))
-
-    text_center_x = (rect_near + rect_far) / 2
-    draw.text(
-        (text_center_x - tw / 2 - bbox[0], y_center - th / 2 - bbox[1]),
-        text, font=font, fill=BANNER_TEXT,
-    )
-    return banner_w
+def _build_pills_layer():
+    """Wycina TYLKO pigulki dni z 4.png (pomija brazowe kolka i widmowy tekst)."""
+    editorial = Image.open(EDITORIAL_LAYER_PATH).convert("RGBA")
+    layer = Image.new("RGBA", (CANVAS_SIZE, CANVAS_SIZE), (0, 0, 0, 0))
+    for cy, cx in PILL_CENTERS:
+        box = (cx - PILL_HALF_W, cy - PILL_HALF_H, cx + PILL_HALF_W, cy + PILL_HALF_H)
+        crop = editorial.crop(box)
+        layer.paste(crop, box[:2], crop)
+    return layer
 
 
 def _paste_ringed_avatar(base_img, avatar_path, center_xy, radius, ring_color):
@@ -214,11 +125,10 @@ def _paste_ringed_avatar(base_img, avatar_path, center_xy, radius, ring_color):
     mask = Image.new("L", (size, size), 0)
     ImageDraw.Draw(mask).ellipse((0, 0, size, size), fill=255)
 
-    ring_pad = S(5)
+    ring_pad = 5
     ring_size = size + ring_pad * 2
     ring = Image.new("RGBA", (ring_size, ring_size), (0, 0, 0, 0))
-    ring_draw = ImageDraw.Draw(ring)
-    ring_draw.ellipse((0, 0, ring_size, ring_size), fill=ring_color)
+    ImageDraw.Draw(ring).ellipse((0, 0, ring_size, ring_size), fill=ring_color)
     base_img.paste(
         ring,
         (int(center_xy[0] - ring_size / 2), int(center_xy[1] - ring_size / 2)),
@@ -231,83 +141,57 @@ def _paste_ringed_avatar(base_img, avatar_path, center_xy, radius, ring_color):
     )
 
 
-def _draw_no_stream_label(base_img, draw, center_x, y_center, font):
-    emote = _get_no_stream_emote()
-    y = y_center - (EMOTE_SIZE / 2 if emote else 0) - S(12)
+def _draw_no_stream_slot(base_img, draw, text_center, emote_center, font):
+    line1, line2 = "BEZ", "STREAMKA"
+    bbox1 = draw.textbbox((0, 0), line1, font=font)
+    bbox2 = draw.textbbox((0, 0), line2, font=font)
+    h1 = bbox1[3] - bbox1[1]
+    h2 = bbox2[3] - bbox2[1]
+    gap = 6
+    total_h = h1 + gap + h2
+    top = text_center[1] - total_h / 2
+    _draw_centered_text(draw, line1, text_center[0], top + h1 / 2, font)
+    _draw_centered_text(draw, line2, text_center[0], top + h1 + gap + h2 / 2, font)
 
-    if emote:
-        emote_resized = emote.resize((EMOTE_SIZE, EMOTE_SIZE))
-        base_img.paste(
-            emote_resized,
-            (int(center_x - EMOTE_SIZE / 2), int(y)),
-            emote_resized,
-        )
-        text_y = y + EMOTE_SIZE + S(4)
-    else:
-        text_y = y_center - S(10)
-
-    text = "BEZ STREAMKA"
-    bbox = draw.textbbox((0, 0), text, font=font)
-    tw = bbox[2] - bbox[0]
-    draw.text((center_x - tw / 2 - bbox[0], text_y), text, font=font, fill=NO_STREAM_TEXT)
+    emote = _get_emote().resize(EMOTE_SIZE)
+    ex = int(emote_center[0] - EMOTE_SIZE[0] / 2)
+    ey = int(emote_center[1] - EMOTE_SIZE[1] / 2)
+    base_img.paste(emote, (ex, ey), emote)
 
 
 def render_week(schedule, week_dates, output_path="calendar.png"):
-    """
-    schedule: dict {YYYY-MM-DD: [nazwy_streamerow]}
-    week_dates: lista 7 obiektów datetime.date, poniedziałek..niedziela
-    """
-    height = HEADER_H + ROW_H * len(week_dates) + MARGIN
-    canvas_w = height  # proporcje 1:1 - płótno poszerzone do wysokości treści
-
-    img = Image.new("RGBA", (canvas_w, height), BG_BASE)
-    img.alpha_composite(_draw_dot_texture(canvas_w, height))
-
-    subtitle = f"{week_dates[0].strftime('%d.%m')} - {week_dates[-1].strftime('%d.%m')}"
-    _draw_glow_title(img, "STREAMY W TYM TYGODNIU", subtitle, canvas_w)
-
+    img = Image.open(BG_PATH).convert("RGBA").resize((CANVAS_SIZE, CANVAS_SIZE))
+    img.alpha_composite(_build_pills_layer())
     draw = ImageDraw.Draw(img)
-    font_banner = _load_font(S(20), path=BANNER_FONT_PATH)
-    font_label = _load_font(S(16))
 
-    center_x = canvas_w / 2
+    date_text = f"{week_dates[0].strftime('%d.%m.')} - {week_dates[-1].strftime('%d.%m.')}"
+    date_font, _ = _fit_font(draw, date_text, 600, 40)
+    _draw_centered_text(draw, date_text, CANVAS_SIZE / 2, DATE_Y_CENTER, date_font)
+
+    title_text = "TYGODNIOWY ROZKŁAD JAZDY"
+    title_font, _ = _fit_font(draw, title_text, TITLE_MAX_WIDTH, 100)
+    _draw_centered_text(draw, title_text, CANVAS_SIZE / 2, TITLE_Y_CENTER, title_font)
+
+    no_stream_font, _ = _fit_font(draw, "STREAMKA", NO_STREAM_TEXT_SIZE[0], 44)
 
     for i, day in enumerate(week_dates):
-        y_center = HEADER_H + i * ROW_H + ROW_H / 2
-        banner_on_right = (i % 2 == 0)
-
+        y = DAY_ROW_Y[i]
         streamers_today = schedule.get(day.isoformat(), [])
-        circle_extent = CIRCLE_R  # promień "zajętej" strefy na środku - rośnie przy 2 avatarach
 
-        # --- avatar(y) / szare kółko na środku ---
-        if streamers_today:
-            if len(streamers_today) == 1:
-                avatar_path = config.STREAMERS.get(streamers_today[0])
-                ring = RING_COLORS.get(streamers_today[0], GRAY_CIRCLE)
+        if not streamers_today:
+            _draw_no_stream_slot(
+                img, draw,
+                text_center=(COL_X_LEFT, y),
+                emote_center=(COL_X_RIGHT, y),
+                font=no_stream_font,
+            )
+        else:
+            slots = [COL_X_LEFT, COL_X_RIGHT]
+            for name, slot_x in zip(streamers_today[:2], slots):
+                avatar_path = config.STREAMERS.get(name)
+                ring = RING_COLORS.get(name, FALLBACK_RING)
                 if avatar_path:
-                    _paste_ringed_avatar(img, avatar_path, (center_x, y_center), CIRCLE_R, ring)
-            else:
-                small_r = round(CIRCLE_R * 0.8)
-                avatar_gap = S(8)  # odstęp między krawędziami kółek - MUSI być >= small_r, inaczej się nakładają
-                offset = small_r + avatar_gap / 2
-                circle_extent = offset + small_r  # dwa kółka sięgają dalej niż jedno - banery muszą to uwzględnić
-                xs = [center_x - offset, center_x + offset]
-                for name, cx in zip(streamers_today[:2], xs):
-                    avatar_path = config.STREAMERS.get(name)
-                    ring = RING_COLORS.get(name, GRAY_CIRCLE)
-                    if avatar_path:
-                        _paste_ringed_avatar(img, avatar_path, (cx, y_center), small_r, ring)
-        else:
-            _draw_no_stream_label(img, draw, center_x, y_center, font_label)
-
-        # --- banner z dniem/datą (na przemian prawo/lewo) ---
-        day_text = f"{DAY_NAMES_PL[i]} {day.strftime('%d.%m')}"
-        if banner_on_right:
-            tip_x = center_x + circle_extent + GAP_CIRCLE_BANNER
-            _draw_banner(draw, tip_x, y_center, day_text, font_banner, points_left=True)
-        else:
-            tip_x = center_x - circle_extent - GAP_CIRCLE_BANNER
-            _draw_banner(draw, tip_x, y_center, day_text, font_banner, points_left=False)
+                    _paste_ringed_avatar(img, avatar_path, (slot_x, y), CIRCLE_R, ring)
 
     img.convert("RGB").save(output_path)
     return output_path
@@ -318,9 +202,10 @@ if __name__ == "__main__":
     week = [monday + dt.timedelta(days=i) for i in range(7)]
     example_schedule = {
         week[0].isoformat(): ["Shiroe"],
-        week[1].isoformat(): ["Shiroe", "ViviOnyx"],
-        week[3].isoformat(): ["ViviOnyx"],
-        week[5].isoformat(): ["Shiroe", "ViviOnyx"],
+        week[1].isoformat(): [],
+        week[2].isoformat(): ["Shiroe", "ViviOnyx"],
+        week[4].isoformat(): [],
+        week[5].isoformat(): ["ViviOnyx"],
     }
-    path = render_week(example_schedule, week, output_path="test_output.png")
+    path = render_week(example_schedule, week, output_path="test_new_design.png")
     print(f"Zapisano: {path}")
