@@ -7,6 +7,7 @@ webhooków). Przypinasz JEDEN RAZ ręcznie w Discordzie po pierwszym
 uruchomieniu - potem ten sam skrypt tylko EDYTUJE tę wiadomość (nie
 tworzy nowej), więc pozostaje przypięta.
 """
+import json
 import re
 import requests
 
@@ -43,30 +44,36 @@ def post_or_edit_calendar(image_path, content_text=""):
     with open(image_path, "rb") as f:
         image_bytes = f.read()  # wczytane RAZ do pamięci - bez ryzyka wyczerpanego strumienia
 
-    payload = {"content": content_text}
+    # Lista zawiera tylko nowy plik: poprzednie załączniki zostaną usunięte.
+    payload = {
+        "content": content_text,
+        "attachments": [{"id": 0, "filename": "calendar.png"}],
+    }
+    form_data = {"payload_json": json.dumps(payload)}
 
     def _files():
         # świeży słownik files przy KAŻDYM requeście - inaczej drugi request
         # (fallback POST po nieudanym PATCH) wyślie pusty/wyczerpany strumień
-        return {"file": ("calendar.png", image_bytes, "image/png")}
+        return {"files[0]": ("calendar.png", image_bytes, "image/png")}
 
     if message_id:
         url = (
             f"https://discord.com/api/webhooks/{webhook_id}/"
             f"{webhook_token}/messages/{message_id}"
         )
-        resp = requests.patch(url, data=payload, files=_files())
+        resp = requests.patch(url, data=form_data, files=_files())
         if resp.status_code == 404:
             # wiadomość została ręcznie usunięta - tworzymy nową
             message_id = None
         else:
             resp.raise_for_status()
-            print(f"Zedytowano wiadomość {message_id}")
+            attachment_count = len(resp.json().get("attachments", []))
+            print(f"Zedytowano wiadomość {message_id}; załączniki: {attachment_count}")
             return message_id
 
     if not message_id:
         url = f"https://discord.com/api/webhooks/{webhook_id}/{webhook_token}?wait=true"
-        resp = requests.post(url, data=payload, files=_files())
+        resp = requests.post(url, data=form_data, files=_files())
         resp.raise_for_status()
         new_id = resp.json()["id"]
         _write_message_id(new_id)
