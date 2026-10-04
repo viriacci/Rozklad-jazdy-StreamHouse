@@ -5,7 +5,14 @@ on:
     # Niedziela, 14:00 UTC = 16:00 PL (czas letni/DST) / 15:00 PL (czas zimowy)
     # Wysyła harmonogram NA NADCHODZĄCY tydzień (patrz fetch_sheet.py)
     - cron: "0 14 * * 0"
+  push:
+    branches: [main]
+    paths: [".github/workflows/main.yml"]
   workflow_dispatch: {}  # pozwala odpalić ręcznie z zakładki Actions
+
+concurrency:
+  group: stream-calendar
+  cancel-in-progress: false
 
 jobs:
   update-calendar:
@@ -15,6 +22,9 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -37,5 +47,16 @@ jobs:
           git config user.name "calendar-bot"
           git config user.email "calendar-bot@users.noreply.github.com"
           git add state/message_id.txt
-          git diff --cached --quiet || git commit -m "chore: update message_id"
-          git push
+          if git diff --cached --quiet; then
+            echo "ID wiadomości bez zmian."
+            exit 0
+          fi
+          git commit -m "chore: update message_id"
+          for attempt in 1 2 3; do
+            git pull --rebase origin main
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+          done
+          echo "::error::Nie udało się zapisać ID wiadomości po trzech próbach."
+          exit 1
