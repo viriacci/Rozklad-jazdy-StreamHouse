@@ -1,4 +1,5 @@
 name: Aktualizacja kalendarza streamów
+run-name: "${{ github.event_name == 'schedule' && 'Kontrola cykliczna rozkładu' || inputs.dry_run && 'Podgląd rozkładu' || 'Publikacja rozkładu' }}"
 on:
   schedule:
     - cron: "0 16 * * *"
