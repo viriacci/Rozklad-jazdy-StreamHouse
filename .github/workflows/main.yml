@@ -1,8 +1,5 @@
 name: Aktualizacja kalendarza streamów
 on:
-  push:
-    branches: [main]
-    paths: ['.github/workflows/main.yml']
   schedule:
     - cron: "0 16 * * *"
       timezone: "Europe/Warsaw"
@@ -42,11 +39,10 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          WEEK: ${{ github.event_name == 'push' && 'current' || inputs.week || 'auto' }}
+          WEEK: ${{ inputs.week || 'auto' }}
           DRY_RUN: ${{ inputs.dry_run || false }}
         run: |
           args=(--week "$WEEK")
-          if [ "$GITHUB_EVENT_NAME" = push ]; then args+=(--force); fi
           if [ "$DRY_RUN" = true ]; then args+=(--dry-run); fi
           python scripts/main.py "${args[@]}"
       - uses: actions/upload-artifact@v4
