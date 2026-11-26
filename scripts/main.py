@@ -22,15 +22,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--week", choices=["auto", "current", "next"], default="auto")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
     today = dt.datetime.now(ZoneInfo("Europe/Warsaw")).date()
     dates = week_range(today, args.week)
+    print(f"Publikowany tydzień: {dates[0]} – {dates[-1]}")
     state = load_state()
     if not args.dry_run:
         clean_pending(state)
     schedule = fetch_week_schedule(dates)
     digest = fingerprint(schedule, dates)
-    if not args.dry_run and state.get("fingerprint") == digest:
+    if not args.dry_run and not args.force and state.get("fingerprint") == digest:
         print("Harmonogram bez zmian.")
         return
     image = render_week(schedule, dates, output_path="calendar.png")

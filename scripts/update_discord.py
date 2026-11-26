@@ -58,6 +58,7 @@ def clean_pending(state):
         resp = request("DELETE", webhook_base() + "/messages/" + str(message_id))
         if resp.status_code not in (204, 404):
             raise RuntimeError(f"Discord: nie usunięto poprzedniego rozkładu (HTTP {resp.status_code})")
+        print(f"Poprzedni rozkład {message_id}: HTTP {resp.status_code} (usunięty lub już nie istnieje)")
         state["pending_delete"].remove(message_id)
         save_state(state)
 
@@ -72,7 +73,9 @@ def publish(image_path, digest, state):
         files={"files[0]": ("calendar.png", Path(image_path).read_bytes(), "image/png")})
     if not response.ok:
         raise RuntimeError(f"Discord: nie opublikowano rozkładu (HTTP {response.status_code})")
-    new_id = response.json()["id"]
+    message = response.json()
+    new_id = message["id"]
+    print("Role w nowej wiadomości: " + ", ".join(message.get("mention_roles", [])))
     old_id = state.get("message_id")
     state.update(message_id=new_id, fingerprint=digest)
     if old_id and old_id != new_id:
