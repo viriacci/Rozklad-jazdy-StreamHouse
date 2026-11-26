@@ -1,62 +1,64 @@
 name: Aktualizacja kalendarza streamów
-
 on:
   schedule:
-    # Niedziela, 14:00 UTC = 16:00 PL (czas letni/DST) / 15:00 PL (czas zimowy)
-    # Wysyła harmonogram NA NADCHODZĄCY tydzień (patrz fetch_sheet.py)
-    - cron: "0 14 * * 0"
-  push:
-    branches: [main]
-    paths: [".github/workflows/main.yml"]
-  workflow_dispatch: {}  # pozwala odpalić ręcznie z zakładki Actions
-
+    - cron: "0 16 * * *"
+      timezone: "Europe/Warsaw"
+  workflow_dispatch:
+    inputs:
+      week:
+        description: Tydzień
+        type: choice
+        options: [auto, current, next]
+        default: auto
+      dry_run:
+        description: Tylko podgląd bez wysyłki
+        type: boolean
+        default: true
 concurrency:
   group: stream-calendar
   cancel-in-progress: false
-
 jobs:
   update-calendar:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover -s tests
       - name: Wygeneruj i wyślij kalendarz
-        working-directory: .
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: python scripts/main.py
-
-      - name: Zapisz message_id.txt z powrotem do repo (jeśli się zmienił)
+          WEEK: ${{ inputs.week || 'auto' }}
+          DRY_RUN: ${{ inputs.dry_run || false }}
         run: |
+          args=(--week "$WEEK")
+          if [ "$DRY_RUN" = true ]; then args+=(--dry-run); fi
+          python scripts/main.py "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always() && !cancelled()
+        with:
+          name: calendar-preview
+          path: calendar.png
+          if-no-files-found: ignore
+      - name: Zapisz stan publikacji
+        if: always() && !cancelled()
+        run: |
+          if [ ! -f state/publication.json ]; then exit 0; fi
           git config user.name "calendar-bot"
           git config user.email "calendar-bot@users.noreply.github.com"
-          git add state/message_id.txt
-          if git diff --cached --quiet; then
-            echo "ID wiadomości bez zmian."
-            exit 0
-          fi
-          git commit -m "chore: update message_id"
-          for attempt in 1 2 3; do
-            git pull --rebase origin main
-            if git push origin HEAD:main; then
-              exit 0
-            fi
-          done
-          echo "::error::Nie udało się zapisać ID wiadomości po trzech próbach."
-          exit 1
+          git add state/publication.json
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "chore: update calendar publication [skip ci]"
+          git pull --rebase origin main
+          git push origin HEAD:main

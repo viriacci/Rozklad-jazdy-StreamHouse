@@ -22,6 +22,7 @@ oznaczen 1/2 na circle-placeholderach):
     emotka zawsze w PRAWYM (ustalone z 5.png, niezalezne od strony pigulki).
 """
 import datetime as dt
+from functools import lru_cache
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -127,11 +128,18 @@ def _build_pills_layer():
     return layer
 
 
+@lru_cache(maxsize=32)
+def _avatar_and_mask(avatar_path, size):
+    with Image.open(avatar_path) as original:
+        avatar = original.convert('RGBA').resize((size, size), Image.Resampling.LANCZOS)
+    mask = Image.new('L', (size, size), 0)
+    ImageDraw.Draw(mask).ellipse((0, 0, size, size), fill=255)
+    return avatar, mask
+
+
 def _paste_ringed_avatar(base_img, avatar_path, center_xy, radius, ring_color):
     size = radius * 2
-    avatar = Image.open(avatar_path).convert("RGBA").resize((size, size))
-    mask = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(mask).ellipse((0, 0, size, size), fill=255)
+    avatar, mask = _avatar_and_mask(avatar_path, size)
 
     ring_pad = 5
     ring_size = size + ring_pad * 2

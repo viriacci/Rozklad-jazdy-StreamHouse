@@ -19,6 +19,7 @@ DOKŁADNIE zgadzać z kluczami w config.STREAMERS.
 """
 import json
 import datetime as dt
+from zoneinfo import ZoneInfo
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -43,7 +44,7 @@ def _current_week_range(today=None):
     (_current_week_range) żeby nie trzeba było zmieniać main.py -
     zwraca po prostu inny tydzień niż poprzednio.
     """
-    today = today or dt.date.today()
+    today = today or dt.datetime.now(ZoneInfo('Europe/Warsaw')).date()
     this_monday = today - dt.timedelta(days=today.weekday())
     next_monday = this_monday + dt.timedelta(days=7)
     return [next_monday + dt.timedelta(days=i) for i in range(7)]
@@ -82,41 +83,45 @@ def _verify_sheet_access(client):
         resp.raise_for_status()
 
 
-def fetch_week_schedule():
+def fetch_week_schedule(week_dates=None):
     """
     Zwraca dict: {data (str YYYY-MM-DD): [lista_streamerow_ktorzy_streamuja]}
     dla każdego z 7 dni następnego tygodnia (nawet jeśli pusty).
     """
-    week_dates = _current_week_range()
+    week_dates = week_dates or _current_week_range()
     week_dates_set = set(week_dates)
     result = {d.isoformat(): [] for d in week_dates}
 
     known_streamers = set(config.STREAMERS.keys())
 
     client = _get_client()
-    _verify_sheet_access(client)
     sheet = client.open_by_key(config.SHEET_ID).worksheet(config.SHEET_WORKSHEET_NAME)
     rows = sheet.get_all_values()  # surowe wiersze, bez zakładania nagłówka
 
+    found_dates = set()
     for row in rows:
         if not row:
             continue
         day = _parse_date(row[0])
-        if day is None or day not in week_dates_set:
-            continue  # zły format daty albo spoza bieżącego tygodnia
+        if day is None:
+            if any(str(c).strip() for c in row):
+                raise ValueError(f'Nieprawidłowa data w arkuszu: {row[0]!r}')
+            continue
+        if day not in week_dates_set:
+            continue
+        found_dates.add(day)
 
         for cell in row[1:]:
             name = str(cell).strip()
             if not name:
                 continue
             if name not in known_streamers:
-                print(
-                    f"UWAGA: '{name}' w wierszu z datą {row[0]} nie występuje "
-                    f"w config.STREAMERS - pomijam. Sprawdź literówkę."
-                )
-                continue
-            result[day.isoformat()].append(name)
+                raise ValueError(f"Nieznany streamer {name!r} dla {day}")
+            if name not in result[day.isoformat()]:
+                result[day.isoformat()].append(name)
 
+    if not found_dates:
+        raise ValueError('Brak danych dla wybranego tygodnia; nie zastępuję rozkładu.')
     return result
 
 
